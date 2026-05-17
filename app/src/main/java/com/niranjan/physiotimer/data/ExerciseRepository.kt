@@ -136,6 +136,7 @@ class ExerciseRepository(private val database: PhysioDatabase) {
             completed = completed
         )
     }
+
 }
 
 private fun ExerciseWithSteps.toDomain(): Exercise {
