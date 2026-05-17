@@ -1418,9 +1418,6 @@ internal fun computeStreakData(
     }
 
     val cursor = today.clone() as Calendar
-    if (!qualifies(cursor.timeInMillis)) {
-        cursor.add(Calendar.DAY_OF_YEAR, -1)
-    }
     var currentStreak = 0
     while (qualifies(cursor.timeInMillis)) {
         currentStreak++
