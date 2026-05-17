@@ -89,6 +89,7 @@ import java.text.SimpleDateFormat
 
 private const val DAY_MILLIS = 24L * 60L * 60L * 1000L
 private const val STREAK_THRESHOLD_SECONDS = 600  // 10 minutes
+private const val STREAK_WINDOW_DAYS = 28  // 4 full weeks
 
 @Composable
 internal fun HomeScreen(
@@ -131,7 +132,7 @@ internal fun HomeScreen(
         }
     }
     val streakData = remember(sessionRecordsState) {
-        computeStreakData(sessionRecordsState.orEmpty())
+        sessionRecordsState?.let { computeStreakData(it) }
     }
     WellnessScreen {
         Scaffold(
@@ -164,7 +165,7 @@ internal fun HomeScreen(
                     )
                 }
 
-                if (query.isBlank()) {
+                if (query.isBlank() && streakData != null) {
                     item {
                         StreakGraphCard(streakData = streakData)
                     }
@@ -1138,7 +1139,7 @@ private fun StreakGraphCard(streakData: StreakData) {
 
         Row(horizontalArrangement = Arrangement.spacedBy(WellnessSpacing.Xs)) {
             WellnessChip(text = "Best ${streakData.longestStreak}d")
-            val todayQualifies = streakData.last20Days[19].qualifies
+            val todayQualifies = streakData.recentDays.lastOrNull()?.qualifies == true
             val todayText = when {
                 streakData.todayMinutes == 0 -> "Today 0 / 10 min"
                 todayQualifies -> "Today ${streakData.todayMinutes} min ✓"
@@ -1154,7 +1155,7 @@ private fun StreakGraphCard(streakData: StreakData) {
         }
 
         StreakContributionGrid(
-            days = streakData.last20Days,
+            days = streakData.recentDays,
             firstDayOfWeek = streakData.firstDayOfWeek
         )
 
@@ -1276,7 +1277,7 @@ internal data class StreakDayData(
 )
 
 internal data class StreakData(
-    val last20Days: List<StreakDayData>,
+    val recentDays: List<StreakDayData>,
     val currentStreak: Int,
     val longestStreak: Int,
     val todayMinutes: Int,
@@ -1386,45 +1387,74 @@ internal fun computeStreakData(
     sessions: List<SessionRecord>,
     nowMillis: Long = System.currentTimeMillis()
 ): StreakData {
-    val startOfToday = calendarStartOfDay(nowMillis)
-    val usable = sessions.filter { it.startedAt > 0L }
+    val secondsByDay: Map<Long, Int> = sessions
+        .filter { it.startedAt > 0L }
+        .groupBy { calendarStartOfDay(it.startedAt) }
+        .mapValues { (_, list) -> list.sumOf { it.elapsedSeconds } }
 
-    val last20Days = (19 downTo 0).map { offset ->
-        val dayStart = startOfToday - offset * DAY_MILLIS
-        val totalSec = usable
-            .filter { it.startedAt >= dayStart && it.startedAt < dayStart + DAY_MILLIS }
-            .sumOf { it.elapsedSeconds }
+    fun qualifies(dayStart: Long): Boolean =
+        (secondsByDay[dayStart] ?: 0) >= STREAK_THRESHOLD_SECONDS
+
+    val today = Calendar.getInstance().apply {
+        timeInMillis = nowMillis
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }
+    val todayStart = today.timeInMillis
+
+    val windowStarts = ArrayList<Long>(STREAK_WINDOW_DAYS)
+    val walker = (today.clone() as Calendar).apply {
+        add(Calendar.DAY_OF_YEAR, -(STREAK_WINDOW_DAYS - 1))
+    }
+    repeat(STREAK_WINDOW_DAYS) {
+        windowStarts.add(walker.timeInMillis)
+        walker.add(Calendar.DAY_OF_YEAR, 1)
+    }
+    val recentDays = windowStarts.map { dayStart ->
+        val totalSec = secondsByDay[dayStart] ?: 0
         StreakDayData(totalSeconds = totalSec, qualifies = totalSec >= STREAK_THRESHOLD_SECONDS)
     }
 
-    val startIdx = if (last20Days[19].qualifies) 19 else 18
+    val cursor = today.clone() as Calendar
+    if (!qualifies(cursor.timeInMillis)) {
+        cursor.add(Calendar.DAY_OF_YEAR, -1)
+    }
     var currentStreak = 0
-    for (i in startIdx downTo 0) {
-        if (last20Days[i].qualifies) currentStreak++ else break
+    while (qualifies(cursor.timeInMillis)) {
+        currentStreak++
+        cursor.add(Calendar.DAY_OF_YEAR, -1)
     }
 
-    val qualifyingDayStarts = usable
-        .groupBy { calendarStartOfDay(it.startedAt) }
-        .filter { (_, s) -> s.sumOf { it.elapsedSeconds } >= STREAK_THRESHOLD_SECONDS }
+    val qualifyingDays = secondsByDay
+        .filter { (_, s) -> s >= STREAK_THRESHOLD_SECONDS }
         .keys
         .sorted()
+    val nextDayCal = Calendar.getInstance()
     var longestStreak = 0
     var run = 0
-    for (i in qualifyingDayStarts.indices) {
-        run = if (i == 0 || qualifyingDayStarts[i] - qualifyingDayStarts[i - 1] == DAY_MILLIS) run + 1 else 1
+    var previousDay: Long? = null
+    for (dayStart in qualifyingDays) {
+        val isConsecutive = previousDay?.let { prev ->
+            nextDayCal.timeInMillis = prev
+            nextDayCal.add(Calendar.DAY_OF_YEAR, 1)
+            nextDayCal.timeInMillis == dayStart
+        } ?: false
+        run = if (isConsecutive) run + 1 else 1
         if (run > longestStreak) longestStreak = run
+        previousDay = dayStart
     }
     longestStreak = maxOf(longestStreak, currentStreak)
 
-    val firstDayMillis = startOfToday - 19L * DAY_MILLIS
-    val firstDow = (Calendar.getInstance().apply { timeInMillis = firstDayMillis }
+    val firstDow = (Calendar.getInstance().apply { timeInMillis = windowStarts.first() }
         .get(Calendar.DAY_OF_WEEK) + 5) % 7
 
     return StreakData(
-        last20Days = last20Days,
+        recentDays = recentDays,
         currentStreak = currentStreak,
         longestStreak = longestStreak,
-        todayMinutes = last20Days[19].totalSeconds / 60,
+        todayMinutes = (secondsByDay[todayStart] ?: 0) / 60,
         firstDayOfWeek = firstDow
     )
 }
