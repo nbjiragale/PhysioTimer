@@ -60,6 +60,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -68,6 +69,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -77,7 +79,6 @@ import com.niranjan.physiotimer.data.AppSettings
 import com.niranjan.physiotimer.data.Exercise
 import com.niranjan.physiotimer.data.ExerciseRepository
 import com.niranjan.physiotimer.data.SessionRecord
-import com.niranjan.physiotimer.data.ExerciseStep
 import com.niranjan.physiotimer.data.MotivationVoiceOption
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -87,6 +88,7 @@ import java.util.Locale
 import java.text.SimpleDateFormat
 
 private const val DAY_MILLIS = 24L * 60L * 60L * 1000L
+private const val STREAK_THRESHOLD_SECONDS = 600  // 10 minutes
 
 @Composable
 internal fun HomeScreen(
@@ -117,7 +119,6 @@ internal fun HomeScreen(
     var pendingDelete by remember { mutableStateOf<Exercise?>(null) }
     var pendingResetCompleted by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
-    var classicSets by remember { mutableStateOf(1) }
     val filteredExercises = remember(exercises, query) { exercises.filterByQuery(query) }
     val incompleteExercises = remember(filteredExercises, completedKeySet) {
         filteredExercises.filterNot { exercise ->
@@ -129,11 +130,9 @@ internal fun HomeScreen(
             completedKeySet.contains(exerciseCompletionKey(exercise))
         }
     }
-    val shouldShowClassicTimer = remember(query) {
-        val q = query.trim()
-        q.isBlank() || "classic timer".contains(q, ignoreCase = true)
+    val streakData = remember(sessionRecordsState) {
+        computeStreakData(sessionRecordsState.orEmpty())
     }
-
     WellnessScreen {
         Scaffold(
             containerColor = Color.Transparent,
@@ -165,14 +164,9 @@ internal fun HomeScreen(
                     )
                 }
 
-                if (shouldShowClassicTimer) {
+                if (query.isBlank()) {
                     item {
-                        ClassicTimerCard(
-                            sets = classicSets,
-                            onSetsChange = { classicSets = it.coerceAtLeast(1) },
-                            isCompleted = completedKeySet.contains(classicTimerCompletionKey()),
-                            onStart = { onStart(classicTimerExercise(classicSets)) }
-                        )
+                        StreakGraphCard(streakData = streakData)
                     }
                 }
 
@@ -1066,161 +1060,6 @@ private fun InlineStatChip(
     }
 }
 
-@Composable
-private fun ClassicTimerCard(
-    sets: Int,
-    onSetsChange: (Int) -> Unit,
-    isCompleted: Boolean,
-    onStart: () -> Unit
-) {
-    WellnessCard(
-        containerColor = WellnessSurfaces.Card,
-        shape = RoundedCornerShape(30.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(72.dp)
-                    .clip(CircleShape)
-                    .background(WellnessColors.Sage100),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    painter = painterResource(AppIcons.timer),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(30.dp)
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Classic timer",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = "Counts from 1 to 10 using voice counter.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                WellnessChip(text = "$sets set${if (sets == 1) "" else "s"}")
-                if (isCompleted) {
-                    WellnessChip(
-                        text = "Completed",
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Sets",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = if (sets == 1) "Plays once (1 to 10)." else "Repeats $sets times.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            ClassicSetStepper(
-                value = sets,
-                onValueChange = { onSetsChange(it.coerceAtLeast(1)) }
-            )
-        }
-
-        PrimaryWellnessButton(
-            text = "Start",
-            icon = Icons.Default.PlayArrow,
-            modifier = Modifier.fillMaxWidth(),
-            onClick = onStart
-        )
-    }
-}
-
-@Composable
-private fun ClassicSetStepper(
-    value: Int,
-    onValueChange: (Int) -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(18.dp))
-            .background(WellnessSurfaces.Card)
-            .border(
-                width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.8f),
-                shape = RoundedCornerShape(18.dp)
-            )
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { onValueChange((value - 1).coerceAtLeast(1)) }) {
-                Text("-", style = MaterialTheme.typography.titleLarge)
-            }
-            Box(
-                modifier = Modifier
-                    .height(24.dp)
-                    .width(1.dp)
-                    .background(MaterialTheme.colorScheme.outlineVariant)
-            )
-            Text(
-                text = value.toString(),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(horizontal = 14.dp)
-            )
-            Box(
-                modifier = Modifier
-                    .height(24.dp)
-                    .width(1.dp)
-                    .background(MaterialTheme.colorScheme.outlineVariant)
-            )
-            TextButton(onClick = { onValueChange(value + 1) }) {
-                Text("+", style = MaterialTheme.typography.titleLarge)
-            }
-        }
-    }
-}
-
-private fun classicTimerExercise(sets: Int): Exercise {
-    val safeSets = sets.coerceAtLeast(1)
-    return Exercise(
-        id = 0L,
-        name = "Classic timer",
-        reps = safeSets,
-        startDelaySeconds = 0,
-        startCountdownCountAloudEnabled = false,
-        startCountdownIntervalSeconds = 1,
-        voiceEnabled = true,
-        vibrationEnabled = false,
-        beepEnabled = false,
-        steps = listOf(
-            ExerciseStep(
-                name = "Classic timer",
-                durationSeconds = 10,
-                voicePromptEnabled = false,
-                countAloudEnabled = true,
-                countIntervalSeconds = 1
-            )
-        )
-    )
-}
-
 private fun completedRoutineKeys(
     sessions: List<SessionRecord>,
     resetAtMillis: Long
@@ -1240,10 +1079,6 @@ private fun exerciseCompletionKey(exercise: Exercise): String {
     return completionKey(exercise.id.takeIf { it != 0L }, exercise.name)
 }
 
-private fun classicTimerCompletionKey(): String {
-    return completionKey(exerciseId = null, exerciseName = "Classic timer")
-}
-
 private fun completionKey(exerciseId: Long?, exerciseName: String): String {
     return if (exerciseId != null) {
         "id:$exerciseId"
@@ -1251,6 +1086,202 @@ private fun completionKey(exerciseId: Long?, exerciseName: String): String {
         "name:${exerciseName.trim().lowercase(Locale.US)}"
     }
 }
+
+@Composable
+private fun StreakGraphCard(streakData: StreakData) {
+    WellnessCard(
+        containerColor = WellnessSurfaces.Card,
+        shape = RoundedCornerShape(30.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(WellnessColors.Sage100),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    painter = painterResource(AppIcons.timer),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(26.dp)
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Daily Streak",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "10 min/day keeps your streak alive",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = "${streakData.currentStreak}",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = if (streakData.currentStreak > 0) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = if (streakData.currentStreak == 1) "day" else "days",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(WellnessSpacing.Xs)) {
+            WellnessChip(text = "Best ${streakData.longestStreak}d")
+            val todayQualifies = streakData.last20Days[19].qualifies
+            val todayText = when {
+                streakData.todayMinutes == 0 -> "Today 0 / 10 min"
+                todayQualifies -> "Today ${streakData.todayMinutes} min ✓"
+                else -> "Today ${streakData.todayMinutes} / 10 min"
+            }
+            WellnessChip(
+                text = todayText,
+                containerColor = if (todayQualifies) MaterialTheme.colorScheme.primaryContainer
+                                 else MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = if (todayQualifies) MaterialTheme.colorScheme.primary
+                               else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        StreakContributionGrid(
+            days = streakData.last20Days,
+            firstDayOfWeek = streakData.firstDayOfWeek
+        )
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(WellnessSpacing.Xxs)
+        ) {
+            Text(
+                text = "Less",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            listOf(
+                WellnessColors.Sage100,
+                WellnessColors.Sage200,
+                WellnessColors.Sage300,
+                WellnessColors.Sage600
+            ).forEach { color ->
+                Box(
+                    Modifier
+                        .size(10.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(color)
+                )
+            }
+            Text(
+                text = "More",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun StreakContributionGrid(
+    days: List<StreakDayData>,
+    firstDayOfWeek: Int
+) {
+    val cellSizeDp = 11.dp
+    val gapDp = 3.dp
+    val labelWidthDp = 12.dp
+    val rowLabels = listOf("M", "", "W", "", "F", "", "S")
+
+    val totalCells = firstDayOfWeek + days.size
+    val numCols = (totalCells + 6) / 7
+
+    val density = LocalDensity.current
+    val cellPx = with(density) { cellSizeDp.toPx() }
+    val gapPx = with(density) { gapDp.toPx() }
+    val stepPx = cellPx + gapPx
+
+    val gridWidth = with(density) { (numCols * stepPx - gapPx).toDp() }
+    val gridHeight = with(density) { (7 * stepPx - gapPx).toDp() }
+
+    val cornerRadiusPx = cellPx * 0.3f
+    val emptyOutColor = WellnessColors.Sage100.copy(alpha = 0.4f)
+
+    fun colorForSeconds(s: Int): Color = when {
+        s <= 0 -> WellnessColors.Sage100
+        s < 300 -> WellnessColors.Sage200
+        s < STREAK_THRESHOLD_SECONDS -> WellnessColors.Sage300
+        else -> WellnessColors.Sage600
+    }
+
+    Row(
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .width(labelWidthDp)
+                .height(gridHeight),
+            verticalArrangement = Arrangement.spacedBy(gapDp)
+        ) {
+            rowLabels.forEach { label ->
+                Box(
+                    modifier = Modifier
+                        .width(labelWidthDp)
+                        .height(cellSizeDp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    if (label.isNotEmpty()) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 8.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        Canvas(modifier = Modifier.size(gridWidth, gridHeight)) {
+            for (col in 0 until numCols) {
+                for (row in 0 until 7) {
+                    val dayIndex = col * 7 + row - firstDayOfWeek
+                    val color = if (dayIndex in days.indices) {
+                        colorForSeconds(days[dayIndex].totalSeconds)
+                    } else {
+                        emptyOutColor
+                    }
+                    drawRoundRect(
+                        color = color,
+                        topLeft = Offset(col * stepPx, row * stepPx),
+                        size = Size(cellPx, cellPx),
+                        cornerRadius = CornerRadius(cornerRadiusPx)
+                    )
+                }
+            }
+        }
+    }
+}
+
+internal data class StreakDayData(
+    val totalSeconds: Int,
+    val qualifies: Boolean
+)
+
+internal data class StreakData(
+    val last20Days: List<StreakDayData>,
+    val currentStreak: Int,
+    val longestStreak: Int,
+    val todayMinutes: Int,
+    val firstDayOfWeek: Int
+)
 
 internal data class ProgressBucket(
     val sessionCount: Int,
@@ -1349,6 +1380,53 @@ internal fun computeSevenDayActivity(
             sessionCount = dayItems.size
         )
     }
+}
+
+internal fun computeStreakData(
+    sessions: List<SessionRecord>,
+    nowMillis: Long = System.currentTimeMillis()
+): StreakData {
+    val startOfToday = calendarStartOfDay(nowMillis)
+    val usable = sessions.filter { it.startedAt > 0L }
+
+    val last20Days = (19 downTo 0).map { offset ->
+        val dayStart = startOfToday - offset * DAY_MILLIS
+        val totalSec = usable
+            .filter { it.startedAt >= dayStart && it.startedAt < dayStart + DAY_MILLIS }
+            .sumOf { it.elapsedSeconds }
+        StreakDayData(totalSeconds = totalSec, qualifies = totalSec >= STREAK_THRESHOLD_SECONDS)
+    }
+
+    val startIdx = if (last20Days[19].qualifies) 19 else 18
+    var currentStreak = 0
+    for (i in startIdx downTo 0) {
+        if (last20Days[i].qualifies) currentStreak++ else break
+    }
+
+    val qualifyingDayStarts = usable
+        .groupBy { calendarStartOfDay(it.startedAt) }
+        .filter { (_, s) -> s.sumOf { it.elapsedSeconds } >= STREAK_THRESHOLD_SECONDS }
+        .keys
+        .sorted()
+    var longestStreak = 0
+    var run = 0
+    for (i in qualifyingDayStarts.indices) {
+        run = if (i == 0 || qualifyingDayStarts[i] - qualifyingDayStarts[i - 1] == DAY_MILLIS) run + 1 else 1
+        if (run > longestStreak) longestStreak = run
+    }
+    longestStreak = maxOf(longestStreak, currentStreak)
+
+    val firstDayMillis = startOfToday - 19L * DAY_MILLIS
+    val firstDow = (Calendar.getInstance().apply { timeInMillis = firstDayMillis }
+        .get(Calendar.DAY_OF_WEEK) + 5) % 7
+
+    return StreakData(
+        last20Days = last20Days,
+        currentStreak = currentStreak,
+        longestStreak = longestStreak,
+        todayMinutes = last20Days[19].totalSeconds / 60,
+        firstDayOfWeek = firstDow
+    )
 }
 
 private fun calendarStartOfDay(timeMillis: Long): Long {
