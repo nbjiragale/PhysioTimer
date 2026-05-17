@@ -77,7 +77,6 @@ import com.niranjan.physiotimer.data.AppSettings
 import com.niranjan.physiotimer.data.Exercise
 import com.niranjan.physiotimer.data.ExerciseRepository
 import com.niranjan.physiotimer.data.SessionRecord
-import com.niranjan.physiotimer.data.ExerciseStep
 import com.niranjan.physiotimer.data.MotivationVoiceOption
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -117,7 +116,6 @@ internal fun HomeScreen(
     var pendingDelete by remember { mutableStateOf<Exercise?>(null) }
     var pendingResetCompleted by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
-    var classicSets by remember { mutableStateOf(1) }
     val filteredExercises = remember(exercises, query) { exercises.filterByQuery(query) }
     val incompleteExercises = remember(filteredExercises, completedKeySet) {
         filteredExercises.filterNot { exercise ->
@@ -129,11 +127,6 @@ internal fun HomeScreen(
             completedKeySet.contains(exerciseCompletionKey(exercise))
         }
     }
-    val shouldShowClassicTimer = remember(query) {
-        val q = query.trim()
-        q.isBlank() || "classic timer".contains(q, ignoreCase = true)
-    }
-
     WellnessScreen {
         Scaffold(
             containerColor = Color.Transparent,
@@ -163,17 +156,6 @@ internal fun HomeScreen(
                         onValueChange = { query = it },
                         placeholder = "Search routines"
                     )
-                }
-
-                if (shouldShowClassicTimer) {
-                    item {
-                        ClassicTimerCard(
-                            sets = classicSets,
-                            onSetsChange = { classicSets = it.coerceAtLeast(1) },
-                            isCompleted = completedKeySet.contains(classicTimerCompletionKey()),
-                            onStart = { onStart(classicTimerExercise(classicSets)) }
-                        )
-                    }
                 }
 
                 if (isLoading) {
@@ -1066,161 +1048,6 @@ private fun InlineStatChip(
     }
 }
 
-@Composable
-private fun ClassicTimerCard(
-    sets: Int,
-    onSetsChange: (Int) -> Unit,
-    isCompleted: Boolean,
-    onStart: () -> Unit
-) {
-    WellnessCard(
-        containerColor = WellnessSurfaces.Card,
-        shape = RoundedCornerShape(30.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(72.dp)
-                    .clip(CircleShape)
-                    .background(WellnessColors.Sage100),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    painter = painterResource(AppIcons.timer),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(30.dp)
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Classic timer",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = "Counts from 1 to 10 using voice counter.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                WellnessChip(text = "$sets set${if (sets == 1) "" else "s"}")
-                if (isCompleted) {
-                    WellnessChip(
-                        text = "Completed",
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Sets",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = if (sets == 1) "Plays once (1 to 10)." else "Repeats $sets times.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            ClassicSetStepper(
-                value = sets,
-                onValueChange = { onSetsChange(it.coerceAtLeast(1)) }
-            )
-        }
-
-        PrimaryWellnessButton(
-            text = "Start",
-            icon = Icons.Default.PlayArrow,
-            modifier = Modifier.fillMaxWidth(),
-            onClick = onStart
-        )
-    }
-}
-
-@Composable
-private fun ClassicSetStepper(
-    value: Int,
-    onValueChange: (Int) -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(18.dp))
-            .background(WellnessSurfaces.Card)
-            .border(
-                width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.8f),
-                shape = RoundedCornerShape(18.dp)
-            )
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { onValueChange((value - 1).coerceAtLeast(1)) }) {
-                Text("-", style = MaterialTheme.typography.titleLarge)
-            }
-            Box(
-                modifier = Modifier
-                    .height(24.dp)
-                    .width(1.dp)
-                    .background(MaterialTheme.colorScheme.outlineVariant)
-            )
-            Text(
-                text = value.toString(),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(horizontal = 14.dp)
-            )
-            Box(
-                modifier = Modifier
-                    .height(24.dp)
-                    .width(1.dp)
-                    .background(MaterialTheme.colorScheme.outlineVariant)
-            )
-            TextButton(onClick = { onValueChange(value + 1) }) {
-                Text("+", style = MaterialTheme.typography.titleLarge)
-            }
-        }
-    }
-}
-
-private fun classicTimerExercise(sets: Int): Exercise {
-    val safeSets = sets.coerceAtLeast(1)
-    return Exercise(
-        id = 0L,
-        name = "Classic timer",
-        reps = safeSets,
-        startDelaySeconds = 0,
-        startCountdownCountAloudEnabled = false,
-        startCountdownIntervalSeconds = 1,
-        voiceEnabled = true,
-        vibrationEnabled = false,
-        beepEnabled = false,
-        steps = listOf(
-            ExerciseStep(
-                name = "Classic timer",
-                durationSeconds = 10,
-                voicePromptEnabled = false,
-                countAloudEnabled = true,
-                countIntervalSeconds = 1
-            )
-        )
-    )
-}
-
 private fun completedRoutineKeys(
     sessions: List<SessionRecord>,
     resetAtMillis: Long
@@ -1238,10 +1065,6 @@ private fun completedRoutineKeys(
 
 private fun exerciseCompletionKey(exercise: Exercise): String {
     return completionKey(exercise.id.takeIf { it != 0L }, exercise.name)
-}
-
-private fun classicTimerCompletionKey(): String {
-    return completionKey(exerciseId = null, exerciseName = "Classic timer")
 }
 
 private fun completionKey(exerciseId: Long?, exerciseName: String): String {
