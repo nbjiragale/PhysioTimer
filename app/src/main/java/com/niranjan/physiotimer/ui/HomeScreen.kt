@@ -60,6 +60,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -68,6 +69,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -86,6 +88,7 @@ import java.util.Locale
 import java.text.SimpleDateFormat
 
 private const val DAY_MILLIS = 24L * 60L * 60L * 1000L
+private const val STREAK_THRESHOLD_SECONDS = 600  // 10 minutes
 
 @Composable
 internal fun HomeScreen(
@@ -127,6 +130,9 @@ internal fun HomeScreen(
             completedKeySet.contains(exerciseCompletionKey(exercise))
         }
     }
+    val streakData = remember(sessionRecordsState) {
+        computeStreakData(sessionRecordsState.orEmpty())
+    }
     WellnessScreen {
         Scaffold(
             containerColor = Color.Transparent,
@@ -156,6 +162,12 @@ internal fun HomeScreen(
                         onValueChange = { query = it },
                         placeholder = "Search routines"
                     )
+                }
+
+                if (query.isBlank()) {
+                    item {
+                        StreakGraphCard(streakData = streakData)
+                    }
                 }
 
                 if (isLoading) {
@@ -1075,6 +1087,202 @@ private fun completionKey(exerciseId: Long?, exerciseName: String): String {
     }
 }
 
+@Composable
+private fun StreakGraphCard(streakData: StreakData) {
+    WellnessCard(
+        containerColor = WellnessSurfaces.Card,
+        shape = RoundedCornerShape(30.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(WellnessColors.Sage100),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    painter = painterResource(AppIcons.timer),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(26.dp)
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Daily Streak",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "10 min/day keeps your streak alive",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = "${streakData.currentStreak}",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = if (streakData.currentStreak > 0) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = if (streakData.currentStreak == 1) "day" else "days",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(WellnessSpacing.Xs)) {
+            WellnessChip(text = "Best ${streakData.longestStreak}d")
+            val todayQualifies = streakData.last20Days[19].qualifies
+            val todayText = when {
+                streakData.todayMinutes == 0 -> "Today 0 / 10 min"
+                todayQualifies -> "Today ${streakData.todayMinutes} min ✓"
+                else -> "Today ${streakData.todayMinutes} / 10 min"
+            }
+            WellnessChip(
+                text = todayText,
+                containerColor = if (todayQualifies) MaterialTheme.colorScheme.primaryContainer
+                                 else MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = if (todayQualifies) MaterialTheme.colorScheme.primary
+                               else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        StreakContributionGrid(
+            days = streakData.last20Days,
+            firstDayOfWeek = streakData.firstDayOfWeek
+        )
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(WellnessSpacing.Xxs)
+        ) {
+            Text(
+                text = "Less",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            listOf(
+                WellnessColors.Sage100,
+                WellnessColors.Sage200,
+                WellnessColors.Sage300,
+                WellnessColors.Sage600
+            ).forEach { color ->
+                Box(
+                    Modifier
+                        .size(10.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(color)
+                )
+            }
+            Text(
+                text = "More",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun StreakContributionGrid(
+    days: List<StreakDayData>,
+    firstDayOfWeek: Int
+) {
+    val cellSizeDp = 11.dp
+    val gapDp = 3.dp
+    val labelWidthDp = 12.dp
+    val rowLabels = listOf("M", "", "W", "", "F", "", "S")
+
+    val totalCells = firstDayOfWeek + days.size
+    val numCols = (totalCells + 6) / 7
+
+    val density = LocalDensity.current
+    val cellPx = with(density) { cellSizeDp.toPx() }
+    val gapPx = with(density) { gapDp.toPx() }
+    val stepPx = cellPx + gapPx
+
+    val gridWidth = with(density) { (numCols * stepPx - gapPx).toDp() }
+    val gridHeight = with(density) { (7 * stepPx - gapPx).toDp() }
+
+    val cornerRadiusPx = cellPx * 0.3f
+    val emptyOutColor = WellnessColors.Sage100.copy(alpha = 0.4f)
+
+    fun colorForSeconds(s: Int): Color = when {
+        s <= 0 -> WellnessColors.Sage100
+        s < 300 -> WellnessColors.Sage200
+        s < STREAK_THRESHOLD_SECONDS -> WellnessColors.Sage300
+        else -> WellnessColors.Sage600
+    }
+
+    Row(
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .width(labelWidthDp)
+                .height(gridHeight),
+            verticalArrangement = Arrangement.spacedBy(gapDp)
+        ) {
+            rowLabels.forEach { label ->
+                Box(
+                    modifier = Modifier
+                        .width(labelWidthDp)
+                        .height(cellSizeDp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    if (label.isNotEmpty()) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 8.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        Canvas(modifier = Modifier.size(gridWidth, gridHeight)) {
+            for (col in 0 until numCols) {
+                for (row in 0 until 7) {
+                    val dayIndex = col * 7 + row - firstDayOfWeek
+                    val color = if (dayIndex in days.indices) {
+                        colorForSeconds(days[dayIndex].totalSeconds)
+                    } else {
+                        emptyOutColor
+                    }
+                    drawRoundRect(
+                        color = color,
+                        topLeft = Offset(col * stepPx, row * stepPx),
+                        size = Size(cellPx, cellPx),
+                        cornerRadius = CornerRadius(cornerRadiusPx)
+                    )
+                }
+            }
+        }
+    }
+}
+
+internal data class StreakDayData(
+    val totalSeconds: Int,
+    val qualifies: Boolean
+)
+
+internal data class StreakData(
+    val last20Days: List<StreakDayData>,
+    val currentStreak: Int,
+    val longestStreak: Int,
+    val todayMinutes: Int,
+    val firstDayOfWeek: Int
+)
+
 internal data class ProgressBucket(
     val sessionCount: Int,
     val routineCount: Int,
@@ -1172,6 +1380,53 @@ internal fun computeSevenDayActivity(
             sessionCount = dayItems.size
         )
     }
+}
+
+internal fun computeStreakData(
+    sessions: List<SessionRecord>,
+    nowMillis: Long = System.currentTimeMillis()
+): StreakData {
+    val startOfToday = calendarStartOfDay(nowMillis)
+    val usable = sessions.filter { it.startedAt > 0L }
+
+    val last20Days = (19 downTo 0).map { offset ->
+        val dayStart = startOfToday - offset * DAY_MILLIS
+        val totalSec = usable
+            .filter { it.startedAt >= dayStart && it.startedAt < dayStart + DAY_MILLIS }
+            .sumOf { it.elapsedSeconds }
+        StreakDayData(totalSeconds = totalSec, qualifies = totalSec >= STREAK_THRESHOLD_SECONDS)
+    }
+
+    val startIdx = if (last20Days[19].qualifies) 19 else 18
+    var currentStreak = 0
+    for (i in startIdx downTo 0) {
+        if (last20Days[i].qualifies) currentStreak++ else break
+    }
+
+    val qualifyingDayStarts = usable
+        .groupBy { calendarStartOfDay(it.startedAt) }
+        .filter { (_, s) -> s.sumOf { it.elapsedSeconds } >= STREAK_THRESHOLD_SECONDS }
+        .keys
+        .sorted()
+    var longestStreak = 0
+    var run = 0
+    for (i in qualifyingDayStarts.indices) {
+        run = if (i == 0 || qualifyingDayStarts[i] - qualifyingDayStarts[i - 1] == DAY_MILLIS) run + 1 else 1
+        if (run > longestStreak) longestStreak = run
+    }
+    longestStreak = maxOf(longestStreak, currentStreak)
+
+    val firstDayMillis = startOfToday - 19L * DAY_MILLIS
+    val firstDow = (Calendar.getInstance().apply { timeInMillis = firstDayMillis }
+        .get(Calendar.DAY_OF_WEEK) + 5) % 7
+
+    return StreakData(
+        last20Days = last20Days,
+        currentStreak = currentStreak,
+        longestStreak = longestStreak,
+        todayMinutes = last20Days[19].totalSeconds / 60,
+        firstDayOfWeek = firstDow
+    )
 }
 
 private fun calendarStartOfDay(timeMillis: Long): Long {
